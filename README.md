@@ -105,3 +105,85 @@ embeddings = RemoteEmbeddings(
 docs = embeddings.embed_documents(["hello world", "remote embeddings"])
 query = embeddings.embed_query("search text")
 ```
+
+## RAG Pipeline Usage
+
+If your RAG pipeline currently loads a local embedding model inside each application process, you can replace that with `RemoteEmbeddings` and route embedding calls to one shared server.
+
+Before:
+
+```python
+from langchain_huggingface import HuggingFaceEmbeddings
+
+embed_model = HuggingFaceEmbeddings(
+    model_name="Qwen/Qwen3-Embedding-0.6B",
+    model_kwargs={"device": "cuda", "local_files_only": True},
+    cache_folder=EMBEDDING_DIR,
+)
+```
+
+After:
+
+```python
+from remote_embedding import RemoteEmbeddings
+
+embed_model = RemoteEmbeddings(
+    base_url="http://127.0.0.1:5055",
+    model_name="Qwen/Qwen3-Embedding-0.6B",
+)
+```
+
+This makes it easier for multiple RAG applications, workers, or services to share the same loaded embedding model instead of each loading its own copy into GPU memory.
+
+## Build For PyPI
+
+Build distributions locally:
+
+```bash
+python -m pip install --upgrade build
+python -m build
+```
+
+This creates:
+
+- `dist/*.tar.gz`
+- `dist/*.whl`
+
+Upload with Twine:
+
+```bash
+python -m pip install --upgrade twine
+python -m twine upload dist/*
+```
+
+## Contributing
+
+Contributions are welcome through issues and pull requests.
+
+Typical local workflow:
+
+```bash
+git clone git@github.com:MeshkatShB/remote-embedding.git
+cd remote-embedding
+python -m pip install --upgrade build
+python -m build
+```
+
+If you change packaging metadata, rebuild `dist/` before opening a release-oriented pull request.
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE` for the full text.
+
+## Citation
+
+If you use this project in research, infrastructure, or published work, cite the repository:
+
+```bibtex
+@software{bagheri_remote_embedding_2026,
+  author = {Bagheri, Meshkat Shariat},
+  title = {remote-embedding},
+  year = {2026},
+  url = {https://github.com/MeshkatShB/remote-embedding}
+}
+```
