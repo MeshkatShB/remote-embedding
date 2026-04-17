@@ -5,6 +5,8 @@
 - A FastAPI server that exposes a `/embed` API backed by local Hugging Face models.
 - A LangChain-compatible `RemoteEmbeddings` client that calls that server remotely.
 
+This lets multiple applications share a single loaded embedding model instance instead of each process loading its own copy. On constrained GPUs, that reduces duplicated VRAM usage and makes it easier to serve embeddings from limited hardware.
+
 ## Install
 
 ```bash
