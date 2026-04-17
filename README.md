@@ -105,24 +105,3 @@ embeddings = RemoteEmbeddings(
 docs = embeddings.embed_documents(["hello world", "remote embeddings"])
 query = embeddings.embed_query("search text")
 ```
-
-## Build For PyPI
-
-Build distributions locally:
-
-```bash
-python -m pip install --upgrade build
-python -m build
-```
-
-This creates:
-
-- `dist/*.tar.gz`
-- `dist/*.whl`
-
-Upload with Twine:
-
-```bash
-python -m pip install --upgrade twine
-python -m twine upload dist/*
-```
