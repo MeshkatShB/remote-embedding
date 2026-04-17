@@ -1,6 +1,7 @@
 """FastAPI application serving remote embedding inference."""
 
 import asyncio
+import argparse
 import os
 from contextlib import asynccontextmanager
 from typing import Literal, Optional, Union
@@ -13,8 +14,14 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-DEFAULT_HOST = os.getenv("HOST", "0.0.0.0")
-DEFAULT_PORT = int(os.getenv("PORT", "5055"))
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    return int(value) if value else default
+
+
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = _env_int("PORT", 5055)
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME")
 EMBEDDING_DIR = os.getenv("EMBEDDING_DIR")
 DEVICE = os.getenv("DEVICE")
@@ -154,5 +161,62 @@ async def embed(req: EmbeddingRequest) -> EmbeddingResponse:
         raise HTTPException(status_code=500, detail=f"Embedding failed: {exc}") from exc
 
 
-def main() -> None:
-    uvicorn.run("remote_embedding.app:app", host=DEFAULT_HOST, port=DEFAULT_PORT)
+def configure_runtime(
+    *,
+    host: str,
+    port: int,
+    embedding_model_name: Optional[str],
+    embedding_dir: Optional[str],
+    device: Optional[str],
+) -> None:
+    global HOST
+    global PORT
+    global EMBEDDING_MODEL_NAME
+    global EMBEDDING_DIR
+    global DEVICE
+
+    HOST = host
+    PORT = port
+    EMBEDDING_MODEL_NAME = embedding_model_name
+    EMBEDDING_DIR = embedding_dir
+    DEVICE = device
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="remote-embedding-server",
+        description=(
+            "Run a shared embedding server so multiple applications can reuse one "
+            "loaded embedding model instance."
+        ),
+    )
+    parser.add_argument("--host", default=HOST, help="Bind host for the API server.")
+    parser.add_argument("--port", type=int, default=PORT, help="Bind port for the API server.")
+    parser.add_argument(
+        "--model-name",
+        default=EMBEDDING_MODEL_NAME,
+        help="Default embedding model name to preload and use when requests omit model_name.",
+    )
+    parser.add_argument(
+        "--embedding-dir",
+        default=EMBEDDING_DIR,
+        help="Optional Hugging Face cache/model directory.",
+    )
+    parser.add_argument(
+        "--device",
+        default=DEVICE,
+        help="Torch device passed to HuggingFaceEmbeddings, for example cpu or cuda.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    args = parse_args(argv)
+    configure_runtime(
+        host=args.host,
+        port=args.port,
+        embedding_model_name=args.model_name,
+        embedding_dir=args.embedding_dir,
+        device=args.device,
+    )
+    uvicorn.run(app, host=HOST, port=PORT)
