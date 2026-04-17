@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "remote-embedding"
 version = "0.1.0"
-description = "A PyPI-ready FastAPI embedding service and LangChain-compatible remote client."
+description = "A shared FastAPI embedding service and LangChain-compatible remote client for reusing one embedding model across multiple applications and lowering VRAM usage on limited GPUs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
