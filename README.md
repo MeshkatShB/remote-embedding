@@ -31,6 +31,8 @@ PowerShell:
 $env:EMBEDDING_MODEL_NAME="BAAI/bge-base-en-v1.5"
 $env:EMBEDDING_DIR="C:\\path\\to\\model-cache"
 $env:DEVICE="cpu"
+$env:MODEL_KWARGS='{"local_files_only": true, "trust_remote_code": true}'
+$env:ENCODE_KWARGS='{"normalize_embeddings": true}'
 ```
 
 Bash:
@@ -39,6 +41,8 @@ Bash:
 export EMBEDDING_MODEL_NAME=BAAI/bge-base-en-v1.5
 export EMBEDDING_DIR=/path/to/model-cache
 export DEVICE=cpu
+export MODEL_KWARGS='{"local_files_only": true, "trust_remote_code": true}'
+export ENCODE_KWARGS='{"normalize_embeddings": true}'
 ```
 
 You can also configure the server with CLI flags:
@@ -49,7 +53,9 @@ remote-embedding-server \
   --port 5055 \
   --model-name BAAI/bge-base-en-v1.5 \
   --embedding-dir /path/to/model-cache \
-  --device cuda
+  --device cuda \
+  --model-kwargs '{"local_files_only": true, "trust_remote_code": true}' \
+  --encode-kwargs '{"normalize_embeddings": true}'
 ```
 
 Start the API:
@@ -80,6 +86,8 @@ Server configuration:
 - `EMBEDDING_MODEL_NAME`: default model to preload and use when a request does not pass `model_name`
 - `EMBEDDING_DIR`: optional local cache/model directory for Hugging Face downloads or local files
 - `DEVICE`: device passed to `HuggingFaceEmbeddings`, such as `cpu` or `cuda`
+- `MODEL_KWARGS`: JSON object merged into `HuggingFaceEmbeddings(..., model_kwargs=...)`
+- `ENCODE_KWARGS`: JSON object passed to `HuggingFaceEmbeddings(..., encode_kwargs=...)`
 
 Client configuration through `RemoteEmbeddings(...)`:
 
@@ -87,8 +95,13 @@ Client configuration through `RemoteEmbeddings(...)`:
 - `timeout`: request timeout in seconds
 - `expected_dimensions`: optional validation for returned vector size
 - `model_name`: optional per-client default model name sent with each request
+- `embedding_dir`: optional per-client cache/model directory override sent with each request
+- `model_kwargs`: optional JSON-serializable dict sent to the server and merged into `model_kwargs`
+- `encode_kwargs`: optional JSON-serializable dict sent to the server as `encode_kwargs`
 
 If `EMBEDDING_MODEL_NAME` is configured on the server, the server can preload one shared embedding model instance and let multiple applications reuse it. That is what saves VRAM versus loading the same model separately in each application process.
+
+`model_kwargs` and `encode_kwargs` become part of the server-side model cache key. That means different combinations can create different loaded embedding instances, which is flexible but can reduce the VRAM-sharing benefit if overused.
 
 ## Use The Client
 
@@ -100,6 +113,9 @@ embeddings = RemoteEmbeddings(
     timeout=120,
     expected_dimensions=768,
     model_name="BAAI/bge-base-en-v1.5",
+    embedding_dir="C:/models/cache",
+    model_kwargs={"local_files_only": True, "trust_remote_code": True},
+    encode_kwargs={"normalize_embeddings": True},
 )
 
 docs = embeddings.embed_documents(["hello world", "remote embeddings"])
@@ -130,6 +146,8 @@ from remote_embedding import RemoteEmbeddings
 embed_model = RemoteEmbeddings(
     base_url="http://127.0.0.1:5055",
     model_name="Qwen/Qwen3-Embedding-0.6B",
+    embedding_dir="C:/models/cache",
+    encode_kwargs={"normalize_embeddings": True},
 )
 ```
 

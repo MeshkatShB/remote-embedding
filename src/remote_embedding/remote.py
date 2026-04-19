@@ -1,6 +1,6 @@
 """Client for the remote embedding FastAPI service."""
 
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
@@ -15,11 +15,17 @@ class RemoteEmbeddings(Embeddings):
         timeout: int = 300,
         expected_dimensions: Optional[int] = None,
         model_name: Optional[str] = None,
+        embedding_dir: Optional[str] = None,
+        model_kwargs: Optional[dict[str, Any]] = None,
+        encode_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.expected_dimensions = expected_dimensions
         self.model_name = model_name
+        self.embedding_dir = embedding_dir
+        self.model_kwargs = model_kwargs
+        self.encode_kwargs = encode_kwargs
 
         self.session = requests.Session()
         retries = Retry(
@@ -44,6 +50,12 @@ class RemoteEmbeddings(Embeddings):
         payload = {"input": texts, "mode": "documents"}
         if self.model_name:
             payload["model_name"] = self.model_name
+        if self.embedding_dir is not None:
+            payload["embedding_dir"] = self.embedding_dir
+        if self.model_kwargs:
+            payload["model_kwargs"] = self.model_kwargs
+        if self.encode_kwargs:
+            payload["encode_kwargs"] = self.encode_kwargs
 
         response = self.session.post(
             f"{self.base_url}/embed",
@@ -59,6 +71,12 @@ class RemoteEmbeddings(Embeddings):
         payload = {"input": text, "mode": "query"}
         if self.model_name:
             payload["model_name"] = self.model_name
+        if self.embedding_dir is not None:
+            payload["embedding_dir"] = self.embedding_dir
+        if self.model_kwargs:
+            payload["model_kwargs"] = self.model_kwargs
+        if self.encode_kwargs:
+            payload["encode_kwargs"] = self.encode_kwargs
 
         response = self.session.post(
             f"{self.base_url}/embed",
