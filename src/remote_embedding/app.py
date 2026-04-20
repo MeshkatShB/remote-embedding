@@ -2,9 +2,11 @@
 
 import asyncio
 import argparse
+import gc
 import json
 import logging
 import os
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal, Optional, Union
@@ -27,6 +29,12 @@ except PackageNotFoundError:
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     return int(value) if value else default
+
+
+def _positive_int(value: int, *, name: str) -> int:
+    if value < 1:
+        raise ValueError(f"{name} must be greater than 0.")
+    return value
 
 
 def _parse_json_mapping(value: Optional[str], *, source: str) -> dict[str, Any]:
@@ -57,6 +65,15 @@ PORT = _env_int("PORT", 5055)
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME")
 EMBEDDING_DIR = os.getenv("EMBEDDING_DIR")
 DEVICE = os.getenv("DEVICE")
+MAX_LOADED_MODELS = _positive_int(_env_int("MAX_LOADED_MODELS", 1), name="MAX_LOADED_MODELS")
+MAX_INPUTS_PER_REQUEST = _positive_int(
+    _env_int("MAX_INPUTS_PER_REQUEST", 128),
+    name="MAX_INPUTS_PER_REQUEST",
+)
+EMBEDDING_BATCH_SIZE = _positive_int(
+    _env_int("EMBEDDING_BATCH_SIZE", 32),
+    name="EMBEDDING_BATCH_SIZE",
+)
 MODEL_KWARGS = _parse_json_mapping(os.getenv("MODEL_KWARGS"), source="MODEL_KWARGS")
 ENCODE_KWARGS = _parse_json_mapping(os.getenv("ENCODE_KWARGS"), source="ENCODE_KWARGS")
 
@@ -82,11 +99,15 @@ class HealthResponse(BaseModel):
     status: str
     model: str
     device: Optional[str]
+    loaded_models: int
+    max_loaded_models: int
+    max_inputs_per_request: int
+    embedding_batch_size: int
 
 
 class EmbeddingService:
     def __init__(self) -> None:
-        self.embed_models: dict[str, HuggingFaceEmbeddings] = {}
+        self.embed_models: OrderedDict[str, HuggingFaceEmbeddings] = OrderedDict()
         self.lock = asyncio.Lock()
 
     def _resolve_model_name(self, model_name: Optional[str] = None) -> str:
@@ -115,6 +136,37 @@ class EmbeddingService:
             separators=(",", ":"),
         )
 
+    def _clear_cuda_cache(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            return
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _release_model(self, embed_model: HuggingFaceEmbeddings) -> None:
+        client = getattr(embed_model, "client", None)
+        if client is not None and hasattr(client, "to"):
+            try:
+                client.to("cpu")
+            except Exception:
+                logger.debug("Failed to move evicted embedding model to CPU.", exc_info=True)
+
+        del embed_model
+        gc.collect()
+        self._clear_cuda_cache()
+
+    def _evict_extra_models(self) -> None:
+        while len(self.embed_models) > MAX_LOADED_MODELS:
+            _, evicted_model = self.embed_models.popitem(last=False)
+            logger.info(
+                "Evicting embedding model from cache. Loaded models now: %s/%s.",
+                len(self.embed_models),
+                MAX_LOADED_MODELS,
+            )
+            self._release_model(evicted_model)
+
     def load(
         self,
         model_name: Optional[str] = None,
@@ -133,7 +185,11 @@ class EmbeddingService:
             MODEL_KWARGS,
             model_kwargs,
         )
-        resolved_encode_kwargs = _merge_mappings(ENCODE_KWARGS, encode_kwargs)
+        resolved_encode_kwargs = _merge_mappings(
+            {"batch_size": EMBEDDING_BATCH_SIZE},
+            ENCODE_KWARGS,
+            encode_kwargs,
+        )
         cache_key = self._cache_key(
             resolved_model_name,
             resolved_embedding_dir,
@@ -141,6 +197,7 @@ class EmbeddingService:
             resolved_encode_kwargs,
         )
         if cache_key in self.embed_models:
+            self.embed_models.move_to_end(cache_key)
             return self.embed_models[cache_key]
 
         logger.info(
@@ -155,6 +212,12 @@ class EmbeddingService:
             cache_folder=resolved_embedding_dir,
         )
         self.embed_models[cache_key] = embed_model
+        logger.info(
+            "Loaded embedding models: %s/%s.",
+            len(self.embed_models),
+            MAX_LOADED_MODELS,
+        )
+        self._evict_extra_models()
         return embed_model
 
     async def embed_documents(
@@ -165,15 +228,14 @@ class EmbeddingService:
         model_kwargs: Optional[dict[str, Any]] = None,
         encode_kwargs: Optional[dict[str, Any]] = None,
     ) -> list[list[float]]:
-        embed_model = self.load(
-            model_name,
-            embedding_dir=embedding_dir,
-            model_kwargs=model_kwargs,
-            encode_kwargs=encode_kwargs,
-        )
-
-        # Serialize GPU access to avoid VRAM spikes from concurrent requests.
+        # Serialize model loading and GPU access to avoid duplicate loads and VRAM spikes.
         async with self.lock:
+            embed_model = self.load(
+                model_name,
+                embedding_dir=embedding_dir,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs,
+            )
             return await asyncio.to_thread(embed_model.embed_documents, texts)
 
     async def embed_query(
@@ -184,14 +246,13 @@ class EmbeddingService:
         model_kwargs: Optional[dict[str, Any]] = None,
         encode_kwargs: Optional[dict[str, Any]] = None,
     ) -> list[float]:
-        embed_model = self.load(
-            model_name,
-            embedding_dir=embedding_dir,
-            model_kwargs=model_kwargs,
-            encode_kwargs=encode_kwargs,
-        )
-
         async with self.lock:
+            embed_model = self.load(
+                model_name,
+                embedding_dir=embedding_dir,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs,
+            )
             return await asyncio.to_thread(embed_model.embed_query, text)
 
 
@@ -227,6 +288,10 @@ async def health() -> HealthResponse:
         status="ok",
         model=loaded_model_name,
         device=DEVICE,
+        loaded_models=len(svc.embed_models),
+        max_loaded_models=MAX_LOADED_MODELS,
+        max_inputs_per_request=MAX_INPUTS_PER_REQUEST,
+        embedding_batch_size=EMBEDDING_BATCH_SIZE,
     )
 
 
@@ -236,6 +301,12 @@ async def embed(req: EmbeddingRequest) -> EmbeddingResponse:
 
     if not texts or any(not isinstance(text, str) or not text.strip() for text in texts):
         raise HTTPException(status_code=400, detail="Input must contain non-empty strings")
+
+    if len(texts) > MAX_INPUTS_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many inputs. Maximum is {MAX_INPUTS_PER_REQUEST} strings per request.",
+        )
 
     resolved_model_name = (req.model_name or EMBEDDING_MODEL_NAME or "").strip()
     if not resolved_model_name:
@@ -289,6 +360,9 @@ def configure_runtime(
     embedding_model_name: Optional[str],
     embedding_dir: Optional[str],
     device: Optional[str],
+    max_loaded_models: int,
+    max_inputs_per_request: int,
+    embedding_batch_size: int,
     model_kwargs: dict[str, Any],
     encode_kwargs: dict[str, Any],
 ) -> None:
@@ -297,6 +371,9 @@ def configure_runtime(
     global EMBEDDING_MODEL_NAME
     global EMBEDDING_DIR
     global DEVICE
+    global MAX_LOADED_MODELS
+    global MAX_INPUTS_PER_REQUEST
+    global EMBEDDING_BATCH_SIZE
     global MODEL_KWARGS
     global ENCODE_KWARGS
 
@@ -305,6 +382,12 @@ def configure_runtime(
     EMBEDDING_MODEL_NAME = embedding_model_name
     EMBEDDING_DIR = embedding_dir
     DEVICE = device
+    MAX_LOADED_MODELS = _positive_int(max_loaded_models, name="max_loaded_models")
+    MAX_INPUTS_PER_REQUEST = _positive_int(
+        max_inputs_per_request,
+        name="max_inputs_per_request",
+    )
+    EMBEDDING_BATCH_SIZE = _positive_int(embedding_batch_size, name="embedding_batch_size")
     MODEL_KWARGS = model_kwargs
     ENCODE_KWARGS = encode_kwargs
 
@@ -335,6 +418,24 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Torch device passed to HuggingFaceEmbeddings, for example cpu or cuda.",
     )
     parser.add_argument(
+        "--max-loaded-models",
+        type=int,
+        default=MAX_LOADED_MODELS,
+        help="Maximum number of embedding model instances to keep loaded.",
+    )
+    parser.add_argument(
+        "--max-inputs-per-request",
+        type=int,
+        default=MAX_INPUTS_PER_REQUEST,
+        help="Maximum number of strings accepted in one /embed request.",
+    )
+    parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=EMBEDDING_BATCH_SIZE,
+        help="Default batch_size passed to the embedding model encoder.",
+    )
+    parser.add_argument(
         "--model-kwargs",
         default=json.dumps(MODEL_KWARGS) if MODEL_KWARGS else None,
         help="JSON object merged into HuggingFaceEmbeddings model_kwargs.",
@@ -361,6 +462,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         embedding_model_name=args.model_name,
         embedding_dir=args.embedding_dir,
         device=args.device,
+        max_loaded_models=args.max_loaded_models,
+        max_inputs_per_request=args.max_inputs_per_request,
+        embedding_batch_size=args.embedding_batch_size,
         model_kwargs=model_kwargs,
         encode_kwargs=encode_kwargs,
     )

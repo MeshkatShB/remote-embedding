@@ -31,6 +31,9 @@ PowerShell:
 $env:EMBEDDING_MODEL_NAME="BAAI/bge-base-en-v1.5"
 $env:EMBEDDING_DIR="C:\\path\\to\\model-cache"
 $env:DEVICE="cpu"
+$env:MAX_LOADED_MODELS="1"
+$env:MAX_INPUTS_PER_REQUEST="128"
+$env:EMBEDDING_BATCH_SIZE="32"
 $env:MODEL_KWARGS='{"local_files_only": true, "trust_remote_code": true}'
 $env:ENCODE_KWARGS='{"normalize_embeddings": true}'
 ```
@@ -41,6 +44,9 @@ Bash:
 export EMBEDDING_MODEL_NAME=BAAI/bge-base-en-v1.5
 export EMBEDDING_DIR=/path/to/model-cache
 export DEVICE=cpu
+export MAX_LOADED_MODELS=1
+export MAX_INPUTS_PER_REQUEST=128
+export EMBEDDING_BATCH_SIZE=32
 export MODEL_KWARGS='{"local_files_only": true, "trust_remote_code": true}'
 export ENCODE_KWARGS='{"normalize_embeddings": true}'
 ```
@@ -54,6 +60,9 @@ remote-embedding-server \
   --model-name BAAI/bge-base-en-v1.5 \
   --embedding-dir /path/to/model-cache \
   --device cuda \
+  --max-loaded-models 1 \
+  --max-inputs-per-request 128 \
+  --embedding-batch-size 32 \
   --model-kwargs '{"local_files_only": true, "trust_remote_code": true}' \
   --encode-kwargs '{"normalize_embeddings": true}'
 ```
@@ -86,6 +95,9 @@ Server configuration:
 - `EMBEDDING_MODEL_NAME`: default model to preload and use when a request does not pass `model_name`
 - `EMBEDDING_DIR`: optional local cache/model directory for Hugging Face downloads or local files
 - `DEVICE`: device passed to `HuggingFaceEmbeddings`, such as `cpu` or `cuda`
+- `MAX_LOADED_MODELS`: maximum number of embedding model instances kept in memory, default `1`
+- `MAX_INPUTS_PER_REQUEST`: maximum number of strings accepted in one `/embed` request, default `128`
+- `EMBEDDING_BATCH_SIZE`: default encoder `batch_size`, default `32`
 - `MODEL_KWARGS`: JSON object merged into `HuggingFaceEmbeddings(..., model_kwargs=...)`
 - `ENCODE_KWARGS`: JSON object passed to `HuggingFaceEmbeddings(..., encode_kwargs=...)`
 
@@ -101,7 +113,7 @@ Client configuration through `RemoteEmbeddings(...)`:
 
 If `EMBEDDING_MODEL_NAME` is configured on the server, the server can preload one shared embedding model instance and let multiple applications reuse it. That is what saves VRAM versus loading the same model separately in each application process.
 
-`model_kwargs` and `encode_kwargs` become part of the server-side model cache key. That means different combinations can create different loaded embedding instances, which is flexible but can reduce the VRAM-sharing benefit if overused.
+`model_kwargs` and `encode_kwargs` become part of the server-side model cache key. Different combinations can create different embedding instances. The server evicts older instances once `MAX_LOADED_MODELS` is exceeded, and defaults to keeping one model loaded to protect GPU memory.
 
 ## Use The Client
 
