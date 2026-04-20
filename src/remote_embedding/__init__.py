@@ -1,6 +1,12 @@
 """Public package exports for remote-embedding."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .remote import RemoteEmbeddings
 
 __all__ = ["RemoteEmbeddings"]
-__version__ = "0.2.1"
+
+try:
+    __version__ = version("remote-embedding")
+except PackageNotFoundError:
+    __version__ = "0.0.0"

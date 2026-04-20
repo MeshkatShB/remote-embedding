@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal, Optional, Union
 
 import uvicorn
@@ -16,6 +17,11 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 logger = logging.getLogger("remote_embedding.server")
+
+try:
+    PACKAGE_VERSION = version("remote-embedding")
+except PackageNotFoundError:
+    PACKAGE_VERSION = "0.0.0"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -199,7 +205,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Shared Embedding Service", version="0.2.1", lifespan=lifespan)
+app = FastAPI(title="Shared Embedding Service", version=PACKAGE_VERSION, lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
